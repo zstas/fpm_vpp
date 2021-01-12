@@ -1,4 +1,2 @@
-fpm/*
-qpb/*
-!fpm/fpm.proto
-!qpb/qpb.proto
+build/
+.vscode/

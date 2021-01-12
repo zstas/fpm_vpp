@@ -11,9 +11,9 @@ struct VPPAPI {
     VPPAPI();
     ~VPPAPI();
 
-    bool work_route( fpm::Message &m, bool add );
-    bool add_route( fpm::Message &m );
-    bool del_route( fpm::Message &m );
+    // bool work_route( fpm::Message &m, bool add );
+    // bool add_route( fpm::Message &m );
+    // bool del_route( fpm::Message &m );
     bool create_tap( uint8_t id, const std::string &netns );
 };
 

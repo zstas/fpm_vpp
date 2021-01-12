@@ -1,19 +1,37 @@
 #include "main.hpp"
+#include <iomanip>
 
-int Netlink::data_cb_route( const struct nlmsghdr *nlh, void *data ) {
-    struct rtmsg *rm = reinterpret_cast<struct rtmsg *>( mnl_nlmsg_get_payload( nlh ) );
-    struct nlattr *attr = reinterpret_cast<struct nlattr *>( mnl_nlmsg_get_payload_offset( nlh, sizeof( struct rtmsg ) ) );
-    while( mnl_attr_ok( attr, reinterpret_cast<char*>( mnl_nlmsg_get_payload_tail( nlh ) ) - reinterpret_cast<char*>( attr ) ) ) {
-        int type = mnl_attr_get_type( attr );
-        switch( type ) {
+extern "C" {
+#include "fpm.h"
+}
+
+int Netlink::process_route_msg( const struct nlmsghdr *nlh, void *data ) {
+    struct rtmsg *rm = reinterpret_cast<struct rtmsg *>( NLMSG_DATA( nlh ) );
+    switch( rm->rtm_family ) {
+    case AF_INET: std::cout << "Family: AF_INET" << std::endl;
+    case AF_INET6: std::cout << "Family: AF_INET6" << std::endl;
+    }
+
+    // struct nlattr *attr = reinterpret_cast<struct nlattr *>( (void*)rm + sizeof(rm) );
+    auto attr = RTM_RTA( rm );
+    int len = MNL_ALIGN( nlh->nlmsg_len );
+    while( RTA_OK( attr, len ) ) {
+        std::cout << "rtattr type: " << attr->rta_type << std::endl;
+        switch( attr->rta_type ) {
         case RTA_DST:
-            printf( "%02x\n", mnl_attr_get_u32( attr ) );
+            printf( "Destination: 0x%08x\n", *(uint32_t*)RTA_DATA( attr ) );
             break;
         case RTA_GATEWAY:
-            printf( "%02x\n", mnl_attr_get_u32( attr ) );
+            printf( "Gateway: 0x%08x\n", *(uint32_t*)RTA_DATA( attr )  );
+            break;
+        case RTA_PRIORITY:
+            printf( "Priority: %d\n", *(uint32_t*)RTA_DATA( attr )  );
+            break;
+        case RTA_OIF:
+            printf( "OIF: %d\n", *(uint32_t*)RTA_DATA( attr )  );
             break;
         }
-        attr = mnl_attr_next( attr );
+        attr = RTA_NEXT( attr, len );
     }
     return MNL_CB_OK;
 }
@@ -24,7 +42,8 @@ int Netlink::data_cb( const struct nlmsghdr *nlh, void *data )
 	switch( nlh->nlmsg_type ) {
 	case RTM_NEWROUTE:
 	case RTM_DELROUTE:
-        return data_cb_route( nlh, data );
+        std::cout << "ROUTE" << std::endl;
+        return process_route_msg( nlh, data );
 	case RTM_NEWNEIGH:
 	case RTM_DELNEIGH:
         std::cout << "NEIGH" << std::endl;
@@ -36,28 +55,49 @@ int Netlink::data_cb( const struct nlmsghdr *nlh, void *data )
         break;
 		//return data_cb_address(nlh, data);
 	default:
+        std::cout << "Unknown type: " << nlh->nlmsg_type << std::endl;
         break;
 	}
+    // std::cout << "len: " << NLMSG_LENGTH( nlh ) << std::endl
     return MNL_CB_OK;
 }
 
+std::ostream& operator<<( std::ostream &os, const std::vector<uint8_t> &in ) {
+    auto flags = os.flags();
+    for( auto const &b: in ) {
+        os << "0x" << std::hex << std::setw( 2 ) << std::setfill('0') << static_cast<int>( b ) << " ";
+    }
+    os.flags( flags );
+    return os;
+}
 
 void Netlink::process( std::vector<uint8_t> &v) {
     int ret;
     fpm_msg_hdr_t *hdr;
     hdr = reinterpret_cast<fpm_msg_hdr_t *>( v.data() );
     if( hdr->msg_type == FPM_MSG_TYPE_NETLINK ) {
-        log( "we don't support netlink yet" );
-    } else if( hdr->msg_type == FPM_MSG_TYPE_PROTOBUF ) {
-        fpm::Message m;
-        m.ParseFromArray( fpm_msg_data( hdr ), fpm_msg_len( hdr ) );
-        m.PrintDebugString();
-        if( m.type() == fpm::Message_Type::Message_Type_ADD_ROUTE ) {
-            log( "adding route" );
-            vpp.add_route( m );
-        } else if( m.type() == fpm::Message_Type::Message_Type_DELETE_ROUTE ) {
-            log( "deleting route" );
-            vpp.del_route( m );
+        std::cout << "Processing netlink fpm message" << std::endl;
+        auto msg_data = fpm_msg_data( hdr );
+        auto msg_len = fpm_msg_len( hdr );
+        auto nh = (struct nlmsghdr *)msg_data;
+        while( NLMSG_OK( nh, msg_len ) ) {
+            std::cout << "NLMSG header type: " << nh->nlmsg_type << std::endl;
+            /* The end of multipart message */
+            if (nh->nlmsg_type == NLMSG_DONE)
+                return;
+
+            if (nh->nlmsg_type == NLMSG_ERROR)
+                return;
+            // void *data = NLMSG_PAYLOAD( nh, msg_len );
+            data_cb( nh, NLMSG_DATA( nh ) );
+
+            nh = NLMSG_NEXT( nh, msg_len );
         }
+
+    } else if( hdr->msg_type == FPM_MSG_TYPE_PROTOBUF ) {
+        std::cout << "We don't support protobug" << std::endl;
+        // m.ParseFromArray( );
+    } else {
+        std::cout << "Unknown FPM MSG TYPE: " << static_cast<int>( hdr->msg_type ) << std::endl;
     }
 }

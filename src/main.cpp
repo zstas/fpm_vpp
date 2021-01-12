@@ -1,11 +1,9 @@
 #include "main.hpp"
 
-
-
 class FPM_conn {
 private:
     boost::asio::ip::tcp::socket socket;
-    std::array<uint8_t,1500> buf;
+    std::array<uint8_t,65535> buf;
     Netlink nl;
 public:
     FPM_conn( boost::asio::ip::tcp::socket s ):
@@ -19,6 +17,11 @@ public:
     }
 
     void on_read( boost::system::error_code ec, std::size_t length ) {
+        if( ec ) {
+            std::cerr << "Error: " << ec.message() << std::endl;
+            start();
+            return;
+        }
         std::cout << "rcd bytes: " << length << std::endl;
         std::vector<uint8_t> v { buf.data(), buf.data() + length };
         nl.process( v );
@@ -37,7 +40,7 @@ private:
 public:
     FPM_mgr():
         addr( boost::asio::ip::address_v4::any() ),
-        acceptor( io, boost::asio::ip::tcp::endpoint( boost::asio::ip::tcp::v4(), 31337 ) ),
+        acceptor( io, boost::asio::ip::tcp::endpoint( boost::asio::ip::tcp::v4(), 2620 ) ),
         socket( io )
     {
         acceptor.async_accept( socket, std::bind( &FPM_mgr::on_accept, this, std::placeholders::_1 ) );
@@ -56,7 +59,6 @@ void log( const std::string &m ) {
 }
 
 int main( int argc, char *argv[] ) {
-    GOOGLE_PROTOBUF_VERIFY_VERSION;
     FPM_mgr fpm;
     return 0;
 }
