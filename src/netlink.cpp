@@ -1,65 +1,144 @@
-#include "main.hpp"
 #include <iomanip>
+#include <sstream>
+
+#include "main.hpp"
+#include "netlink.hpp"
 
 extern "C" {
 #include "fpm.h"
 }
 
-int Netlink::process_route_msg( const struct nlmsghdr *nlh, void *data ) {
+std::ostream& operator<<( std::ostream &os, const RouteMsg &m ) {
+    os << "Destination: " << m.destination;
+    os << " VRF ID: " << (int)m.vrf_id;
+    for( auto const &nh: m.nhops ) {
+        os << " Nexthop: " << nh.nexthop.value_or( "N/A" );
+        os << " Priority: " << nh.priority;
+        if( nh.oif ) 
+            os << " OIF: " << *nh.oif;
+    }
+    return os;
+}
+
+RouteMsg Netlink::process_route_msg( const struct nlmsghdr *nlh ) {
+    RouteMsg msg;
+    RouteNhop nhop;
     struct rtmsg *rm = reinterpret_cast<struct rtmsg *>( NLMSG_DATA( nlh ) );
     switch( rm->rtm_family ) {
-    case AF_INET: std::cout << "Family: AF_INET" << std::endl;
-    case AF_INET6: std::cout << "Family: AF_INET6" << std::endl;
+    case AF_INET: msg.is_ipv6 = false; break;
+    case AF_INET6: msg.is_ipv6 = true; break;
     }
 
-    // struct nlattr *attr = reinterpret_cast<struct nlattr *>( (void*)rm + sizeof(rm) );
+    msg.vrf_id = rm->rtm_table;
+
+    struct in_addr ipv4;
+    memset( &ipv4, 0, sizeof( ipv4 ) );
+    struct in6_addr ipv6;
+    memset( &ipv6, 0, sizeof( ipv6 ) );
+    char buf[ INET6_ADDRSTRLEN ];
+    memset( buf, 0, sizeof( buf ) );
+
     auto attr = RTM_RTA( rm );
-    int len = MNL_ALIGN( nlh->nlmsg_len );
+    int len = RTA_ALIGN( nlh->nlmsg_len );
+
     while( RTA_OK( attr, len ) ) {
-        std::cout << "rtattr type: " << attr->rta_type << std::endl;
         switch( attr->rta_type ) {
         case RTA_DST:
-            printf( "Destination: 0x%08x\n", *(uint32_t*)RTA_DATA( attr ) );
+            if( rm->rtm_family == AF_INET ) {
+                ipv4.s_addr = *(uint32_t*)RTA_DATA( attr );
+                inet_ntop( rm->rtm_family, &ipv4, buf, sizeof( buf ) );
+            } else {
+                memcpy( ipv6.__in6_u.__u6_addr8, RTA_DATA( attr ), RTA_PAYLOAD( attr ) );
+                inet_ntop( rm->rtm_family, &ipv6, buf, sizeof( buf ) );
+            }
+            msg.destination = buf;
+            msg.dest_len = rm->rtm_dst_len;
             break;
         case RTA_GATEWAY:
-            printf( "Gateway: 0x%08x\n", *(uint32_t*)RTA_DATA( attr )  );
+            if( rm->rtm_family == AF_INET ) {
+                ipv4.s_addr = *(uint32_t*)RTA_DATA( attr );
+                inet_ntop( rm->rtm_family, &ipv4, buf, sizeof( buf ) );
+            } else {
+                memcpy( ipv6.__in6_u.__u6_addr8, RTA_DATA( attr ), RTA_PAYLOAD( attr ) );
+                inet_ntop( rm->rtm_family, &ipv6, buf, sizeof( buf ) );
+            }
+            nhop.nexthop = buf;
             break;
         case RTA_PRIORITY:
-            printf( "Priority: %d\n", *(uint32_t*)RTA_DATA( attr )  );
+            nhop.priority = *(uint32_t*)RTA_DATA( attr );
             break;
         case RTA_OIF:
-            printf( "OIF: %d\n", *(uint32_t*)RTA_DATA( attr )  );
+            nhop.oif = *(uint32_t*)RTA_DATA( attr );
             break;
+        case RTA_MULTIPATH: {
+            struct rtnexthop *nhptr = (struct rtnexthop*)RTA_DATA( attr );
+            int rtnhp_len = RTNH_ALIGN( attr->rta_len );
+
+            while( RTNH_OK( nhptr, rtnhp_len ) ) {
+                nhop = RouteNhop();
+                struct rtattr *nhattr = RTNH_DATA( nhptr );
+                int attrlen = RTA_ALIGN( nhattr->rta_len );
+                while( RTA_OK( nhattr, attrlen ) ) {
+                    switch( nhattr->rta_type ) {
+                    case RTA_GATEWAY:
+                        if( rm->rtm_family == AF_INET ) {
+                            ipv4.s_addr = *(uint32_t*)RTA_DATA( nhattr );
+                            inet_ntop( rm->rtm_family, &ipv4, buf, sizeof( buf ) );
+                        } else {
+                            memcpy( ipv6.__in6_u.__u6_addr8, RTA_DATA( nhattr ), RTA_PAYLOAD( nhattr ) );
+                            inet_ntop( rm->rtm_family, &ipv6, buf, sizeof( buf ) );
+                        }
+                        nhop.nexthop = buf;
+                        break;
+                    case RTA_PRIORITY:
+                        nhop.priority = *(uint32_t*)RTA_DATA( nhattr );
+                        break;
+                    case RTA_OIF:
+                        nhop.oif = *(uint32_t*)RTA_DATA( nhattr );
+                        break;
+                    }
+                    nhattr = RTA_NEXT( nhattr, attrlen );
+                }
+                msg.nhops.push_back( nhop );
+                nhptr = RTNH_NEXT( nhptr );
+            }
+
+            break;
+        }
+        default:
+            printf( "Unknown attribute %d\n", attr->rta_type );
         }
         attr = RTA_NEXT( attr, len );
     }
-    return MNL_CB_OK;
+
+    if( msg.nhops.empty() ) {
+        msg.nhops.emplace_back( nhop );
+    }
+
+    return msg;
 }
 
-int Netlink::data_cb( const struct nlmsghdr *nlh, void *data )
-{
-    
+bool Netlink::data_cb( const struct nlmsghdr *nlh ) {
 	switch( nlh->nlmsg_type ) {
 	case RTM_NEWROUTE:
-	case RTM_DELROUTE:
-        std::cout << "ROUTE" << std::endl;
-        return process_route_msg( nlh, data );
+	case RTM_DELROUTE: {
+        auto msg = process_route_msg( nlh );
+        vpp.add_route( msg, nlh->nlmsg_type == RTM_NEWROUTE ? true : false );
+        break;
+    }
 	case RTM_NEWNEIGH:
 	case RTM_DELNEIGH:
         std::cout << "NEIGH" << std::endl;
         break;
-		//return data_cb_neighbor(nlh, data);
 	case RTM_NEWADDR:
 	case RTM_DELADDR:
         std::cout << "ADDR" << std::endl;
         break;
-		//return data_cb_address(nlh, data);
 	default:
         std::cout << "Unknown type: " << nlh->nlmsg_type << std::endl;
         break;
 	}
-    // std::cout << "len: " << NLMSG_LENGTH( nlh ) << std::endl
-    return MNL_CB_OK;
+    return true;
 }
 
 std::ostream& operator<<( std::ostream &os, const std::vector<uint8_t> &in ) {
@@ -75,29 +154,32 @@ void Netlink::process( std::vector<uint8_t> &v) {
     int ret;
     fpm_msg_hdr_t *hdr;
     hdr = reinterpret_cast<fpm_msg_hdr_t *>( v.data() );
-    if( hdr->msg_type == FPM_MSG_TYPE_NETLINK ) {
-        std::cout << "Processing netlink fpm message" << std::endl;
-        auto msg_data = fpm_msg_data( hdr );
-        auto msg_len = fpm_msg_len( hdr );
-        auto nh = (struct nlmsghdr *)msg_data;
-        while( NLMSG_OK( nh, msg_len ) ) {
-            std::cout << "NLMSG header type: " << nh->nlmsg_type << std::endl;
-            /* The end of multipart message */
-            if (nh->nlmsg_type == NLMSG_DONE)
-                return;
+    auto len = v.size();
+    while( fpm_msg_ok( hdr, len ) ) {
+        if( hdr->msg_type == FPM_MSG_TYPE_NETLINK ) {
+            // std::cout << "Processing netlink fpm message" << std::endl;
+            auto msg_len = fpm_msg_len( hdr );
 
-            if (nh->nlmsg_type == NLMSG_ERROR)
-                return;
-            // void *data = NLMSG_PAYLOAD( nh, msg_len );
-            data_cb( nh, NLMSG_DATA( nh ) );
+            struct nlmsghdr *nh = reinterpret_cast<struct nlmsghdr*>( fpm_msg_data( hdr ) );
+            while( NLMSG_OK( nh, msg_len ) ) {
+                /* The end of multipart message */
+                if (nh->nlmsg_type == NLMSG_DONE)
+                    return;
 
-            nh = NLMSG_NEXT( nh, msg_len );
+                if (nh->nlmsg_type == NLMSG_ERROR)
+                    return;
+
+                data_cb( nh );
+
+                nh = NLMSG_NEXT( nh, msg_len );
+            }
+
+        } else if( hdr->msg_type == FPM_MSG_TYPE_PROTOBUF ) {
+            std::cout << "We don't support protobug" << std::endl;
+            // m.ParseFromArray( );
+        } else {
+            std::cout << "Unknown FPM MSG TYPE: " << static_cast<int>( hdr->msg_type ) << std::endl;
         }
-
-    } else if( hdr->msg_type == FPM_MSG_TYPE_PROTOBUF ) {
-        std::cout << "We don't support protobug" << std::endl;
-        // m.ParseFromArray( );
-    } else {
-        std::cout << "Unknown FPM MSG TYPE: " << static_cast<int>( hdr->msg_type ) << std::endl;
+        hdr = fpm_msg_next( hdr, &len );
     }
 }

@@ -2,7 +2,6 @@
 #include <iostream>
 #include <queue>
 
-#include <libmnl/libmnl.h>
 #include <linux/rtnetlink.h>
 
 #include "vpp.hpp"

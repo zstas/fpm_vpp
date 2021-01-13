@@ -23,114 +23,55 @@ VPPAPI::~VPPAPI() {
     }
 }
 
-// bool VPPAPI::add_route( fpm::Message &m ) {
-//     vapi::Ip_route_add_del route( con, 0 );
-//     auto &req = route.get_request().get_payload();
-//     req.is_add = 1;
+bool VPPAPI::add_route( const RouteMsg &msg, bool add ) {
+    vapi::Ip_route_add_del route( con, 0 );
+    auto &req = route.get_request().get_payload();
+    req.is_add = add ? 1 : 0;
 
-//     if( !m.has_add_route() ) {
-//         log( "Message doesn't have add_route value" );
-//         return false;
-//     }
+    if( !msg.is_ipv6 ) {
+        req.route.prefix.address.af = vapi_enum_address_family::ADDRESS_IP4;
+        req.route.table_id = msg.vrf_id;
+        req.is_multipath = 0;
 
-//     auto &add_route = m.add_route();
-//     if( add_route.nexthops().size() < 1 ) {
-//         log( "Cannot install routes without ip at this moment" );
-//     }
-//     if( add_route.address_family() == qpb::AddressFamily::IPV4 ) {
-//         req.route.table_id = 0;
-//         req.route.prefix.address.af = vapi_enum_address_family::ADDRESS_IP4;
-//         req.is_multipath = 0;
-//         // Filling up the route info
-//         auto &prefix = add_route.key().prefix();
-//         req.route.prefix.address.un.ip4[0] = prefix.bytes()[0];
-//         req.route.prefix.address.un.ip4[1] = prefix.bytes()[1];
-//         req.route.prefix.address.un.ip4[2] = prefix.bytes()[2];
-//         req.route.prefix.address.un.ip4[3] = prefix.bytes()[3];
-//         req.route.prefix.len = prefix.length();
-//         log( std::to_string( prefix.length() ) );
-//         // Filling up the nexthop info
-//         auto &nexthops = add_route.nexthops();
-//         req.route.n_paths = nexthops.size();
-//         uint8_t i = 0;
-//         for( auto const &nh: nexthops ) {
-//             auto &nexthop = nh.address().v4();
-//             req.route.paths[i].nh.address.ip4[0] = ( nexthop.value() & 0xFF000000 ) >> 24;
-//             req.route.paths[i].nh.address.ip4[1] = ( nexthop.value() & 0x00FF0000 ) >> 16;
-//             req.route.paths[i].nh.address.ip4[2] = ( nexthop.value() & 0x0000FF00 ) >> 8;
-//             req.route.paths[i].nh.address.ip4[3] = ( nexthop.value() & 0x000000FF );
-//             i++;
-//         }
-//     } else if( add_route.address_family() == qpb::AddressFamily::IPV6 ) {
+        // Filling up the route info
+        struct in_addr ipv4;
+        memset( &ipv4, 0, sizeof( ipv4 ) );
+        inet_pton( AF_INET, msg.destination.c_str(), &ipv4 );
+        *(uint32_t*)req.route.prefix.address.un.ip4 = ipv4.s_addr;
+        req.route.prefix.len = msg.dest_len;
 
-//     } else {
-//         return false;
-//     }
+        // Filling up the nexthop info
+        req.route.n_paths = msg.nhops.size();
+        uint8_t i = 0;
+        for( auto const &nh: msg.nhops ) {
+            if( nh.nexthop ) {
+                memset( &ipv4, 0, sizeof( ipv4 ) );
+                inet_pton( AF_INET, msg.destination.c_str(), &ipv4 );
+                *(uint32_t*)req.route.paths[i].nh.address.ip4 = ipv4.s_addr;
+                i++;
+            }
+        }
+    } else {
+        return false;
+    }
 
-//     auto ret = route.execute();
-//     if( ret != VAPI_OK ) {
-//         log( "error!" );
-//     }
+    auto ret = route.execute();
+    if( ret != VAPI_OK ) {
+        log( "error!" );
+    }
 
-//     do {
-//         ret = con.wait_for_response( route );
-//     } while( ret == VAPI_EAGAIN );
+    do {
+        ret = con.wait_for_response( route );
+    } while( ret == VAPI_EAGAIN );
 
-//     auto repl = route.get_response().get_payload();
-//     if( static_cast<int>( repl.stats_index ) == -1 ) {
-//         log( "cannot add route" );
-//         return false;
-//     }
-//     log( "successfully installed route: " + std::to_string( repl.stats_index ) );
-//     return true;
-// }
-
-// bool VPPAPI::del_route( fpm::Message &m ) {
-//     vapi::Ip_route_add_del route( con, 0 );
-//     auto &req = route.get_request().get_payload();
-//     req.is_add = 0;
-
-//     if( !m.has_delete_route() ) {
-//         log( "Message doesn't have del_route value" );
-//         return false;
-//     }
-
-//     auto &del_route = m.delete_route();
-//     if( del_route.address_family() == qpb::AddressFamily::IPV4 ) {
-//         req.route.table_id = 0;
-//         req.route.prefix.address.af = vapi_enum_address_family::ADDRESS_IP4;
-//         req.is_multipath = 0;
-//         // Filling up the route info
-//         auto &prefix = del_route.key().prefix();
-//         req.route.prefix.address.un.ip4[0] = prefix.bytes()[0];
-//         req.route.prefix.address.un.ip4[1] = prefix.bytes()[1];
-//         req.route.prefix.address.un.ip4[2] = prefix.bytes()[2];
-//         req.route.prefix.address.un.ip4[3] = prefix.bytes()[3];
-//         req.route.prefix.len = prefix.length();
-//         log( std::to_string( prefix.length() ) );
-//     } else if( del_route.address_family() == qpb::AddressFamily::IPV6 ) {
-
-//     } else {
-//         return false;
-//     }
-
-//     auto ret = route.execute();
-//     if( ret != VAPI_OK ) {
-//         log( "error!" );
-//     }
-
-//     do {
-//         ret = con.wait_for_response( route );
-//     } while( ret == VAPI_EAGAIN );
-
-//     auto repl = route.get_response().get_payload();
-//     if( static_cast<int>( repl.stats_index ) == -1 ) {
-//         log( "cannot del route" );
-//         return false;
-//     }
-//     log( "successfully deleted route: " + std::to_string( repl.stats_index ) );
-//     return true;
-// }
+    auto repl = route.get_response().get_payload();
+    if( static_cast<int>( repl.stats_index ) == -1 ) {
+        log( "cannot add route" );
+        return false;
+    }
+    log( "successfully installed route: " + std::to_string( repl.stats_index ) );
+    return true;
+}
 
 bool VPPAPI::create_tap( uint8_t id, const std::string &netns ) {
     vapi::Tap_create_v2 tap{ con };

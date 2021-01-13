@@ -16,6 +16,5 @@ add_executable(fibmgr ${SOURCES})
 
 target_link_libraries(fibmgr PUBLIC boost_system)
 target_link_libraries(fibmgr PUBLIC pthread)
-target_link_libraries(fibmgr PUBLIC mnl)
 target_link_libraries(fibmgr PUBLIC vapiclient)
 target_link_libraries(fibmgr PUBLIC vppapiclient)

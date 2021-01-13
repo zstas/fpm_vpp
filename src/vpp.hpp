@@ -6,14 +6,14 @@
 #include "vapi/ip.api.vapi.hpp"
 #include "vapi/tapv2.api.vapi.hpp"
 
+struct RouteMsg;
+
 struct VPPAPI {
     vapi::Connection con;
     VPPAPI();
     ~VPPAPI();
 
-    // bool work_route( fpm::Message &m, bool add );
-    // bool add_route( fpm::Message &m );
-    // bool del_route( fpm::Message &m );
+    bool add_route( const RouteMsg &msg, bool add );
     bool create_tap( uint8_t id, const std::string &netns );
 };
 

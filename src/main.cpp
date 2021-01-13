@@ -22,7 +22,7 @@ public:
             start();
             return;
         }
-        std::cout << "rcd bytes: " << length << std::endl;
+        // std::cout << "rcd bytes: " << length << std::endl;
         std::vector<uint8_t> v { buf.data(), buf.data() + length };
         nl.process( v );
         start();
