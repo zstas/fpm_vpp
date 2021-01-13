@@ -8,11 +8,31 @@ extern "C" {
 #include "fpm.h"
 }
 
+static std::string printIp( int af, const std::vector<uint8_t> &vec ) {
+    struct in_addr ipv4;
+    memset( &ipv4, 0, sizeof( ipv4 ) );
+    struct in6_addr ipv6;
+    memset( &ipv6, 0, sizeof( ipv6 ) );
+    char buf[ INET6_ADDRSTRLEN ];
+    memset( buf, 0, sizeof( buf ) );
+
+    if( af == AF_INET ) {
+        memcpy( (uint8_t*)&ipv4.s_addr, vec.data(), vec.size() );
+        inet_ntop( af, &ipv4, buf, sizeof( buf ) );
+    } else {
+        memcpy( ipv6.__in6_u.__u6_addr8, vec.data(), vec.size() );
+        inet_ntop( af, &ipv6, buf, sizeof( buf ) );
+    }
+
+    return { buf };
+}
+
 std::ostream& operator<<( std::ostream &os, const RouteMsg &m ) {
-    os << "Destination: " << m.destination;
+    os << "Destination: " << printIp( m.af, m.destination) << "/" << (int)m.dest_len;
     os << " VRF ID: " << (int)m.vrf_id;
     for( auto const &nh: m.nhops ) {
-        os << " Nexthop: " << nh.nexthop.value_or( "N/A" );
+        if( !nh.nexthop.empty() )
+            os << " Nexthop: " << printIp( m.af, nh.nexthop );
         os << " Priority: " << nh.priority;
         if( nh.oif ) 
             os << " OIF: " << *nh.oif;
@@ -24,19 +44,8 @@ RouteMsg Netlink::process_route_msg( const struct nlmsghdr *nlh ) {
     RouteMsg msg;
     RouteNhop nhop;
     struct rtmsg *rm = reinterpret_cast<struct rtmsg *>( NLMSG_DATA( nlh ) );
-    switch( rm->rtm_family ) {
-    case AF_INET: msg.is_ipv6 = false; break;
-    case AF_INET6: msg.is_ipv6 = true; break;
-    }
-
+    msg.af = rm->rtm_family;
     msg.vrf_id = rm->rtm_table;
-
-    struct in_addr ipv4;
-    memset( &ipv4, 0, sizeof( ipv4 ) );
-    struct in6_addr ipv6;
-    memset( &ipv6, 0, sizeof( ipv6 ) );
-    char buf[ INET6_ADDRSTRLEN ];
-    memset( buf, 0, sizeof( buf ) );
 
     auto attr = RTM_RTA( rm );
     int len = RTA_ALIGN( nlh->nlmsg_len );
@@ -44,25 +53,11 @@ RouteMsg Netlink::process_route_msg( const struct nlmsghdr *nlh ) {
     while( RTA_OK( attr, len ) ) {
         switch( attr->rta_type ) {
         case RTA_DST:
-            if( rm->rtm_family == AF_INET ) {
-                ipv4.s_addr = *(uint32_t*)RTA_DATA( attr );
-                inet_ntop( rm->rtm_family, &ipv4, buf, sizeof( buf ) );
-            } else {
-                memcpy( ipv6.__in6_u.__u6_addr8, RTA_DATA( attr ), RTA_PAYLOAD( attr ) );
-                inet_ntop( rm->rtm_family, &ipv6, buf, sizeof( buf ) );
-            }
-            msg.destination = buf;
+            msg.destination = std::vector<uint8_t>( (uint8_t*)RTA_DATA( attr ),  (uint8_t*)RTA_DATA( attr ) + attr->rta_len );
             msg.dest_len = rm->rtm_dst_len;
             break;
         case RTA_GATEWAY:
-            if( rm->rtm_family == AF_INET ) {
-                ipv4.s_addr = *(uint32_t*)RTA_DATA( attr );
-                inet_ntop( rm->rtm_family, &ipv4, buf, sizeof( buf ) );
-            } else {
-                memcpy( ipv6.__in6_u.__u6_addr8, RTA_DATA( attr ), RTA_PAYLOAD( attr ) );
-                inet_ntop( rm->rtm_family, &ipv6, buf, sizeof( buf ) );
-            }
-            nhop.nexthop = buf;
+            nhop.nexthop = std::vector<uint8_t>( (uint8_t*)RTA_DATA( attr ),  (uint8_t*)RTA_DATA( attr ) + attr->rta_len );
             break;
         case RTA_PRIORITY:
             nhop.priority = *(uint32_t*)RTA_DATA( attr );
@@ -81,14 +76,7 @@ RouteMsg Netlink::process_route_msg( const struct nlmsghdr *nlh ) {
                 while( RTA_OK( nhattr, attrlen ) ) {
                     switch( nhattr->rta_type ) {
                     case RTA_GATEWAY:
-                        if( rm->rtm_family == AF_INET ) {
-                            ipv4.s_addr = *(uint32_t*)RTA_DATA( nhattr );
-                            inet_ntop( rm->rtm_family, &ipv4, buf, sizeof( buf ) );
-                        } else {
-                            memcpy( ipv6.__in6_u.__u6_addr8, RTA_DATA( nhattr ), RTA_PAYLOAD( nhattr ) );
-                            inet_ntop( rm->rtm_family, &ipv6, buf, sizeof( buf ) );
-                        }
-                        nhop.nexthop = buf;
+                        nhop.nexthop = std::vector<uint8_t>( (uint8_t*)RTA_DATA( attr ),  (uint8_t*)RTA_DATA( attr ) + attr->rta_len );
                         break;
                     case RTA_PRIORITY:
                         nhop.priority = *(uint32_t*)RTA_DATA( nhattr );
@@ -118,11 +106,12 @@ RouteMsg Netlink::process_route_msg( const struct nlmsghdr *nlh ) {
     return msg;
 }
 
-bool Netlink::data_cb( const struct nlmsghdr *nlh ) {
+bool Netlink::process_one_msg( const struct nlmsghdr *nlh ) {
 	switch( nlh->nlmsg_type ) {
 	case RTM_NEWROUTE:
 	case RTM_DELROUTE: {
         auto msg = process_route_msg( nlh );
+        std::cout << "Processing route: " << msg << std::endl;
         vpp.add_route( msg, nlh->nlmsg_type == RTM_NEWROUTE ? true : false );
         break;
     }
@@ -169,14 +158,13 @@ void Netlink::process( std::vector<uint8_t> &v) {
                 if (nh->nlmsg_type == NLMSG_ERROR)
                     return;
 
-                data_cb( nh );
+                process_one_msg( nh );
 
                 nh = NLMSG_NEXT( nh, msg_len );
             }
 
         } else if( hdr->msg_type == FPM_MSG_TYPE_PROTOBUF ) {
             std::cout << "We don't support protobug" << std::endl;
-            // m.ParseFromArray( );
         } else {
             std::cout << "Unknown FPM MSG TYPE: " << static_cast<int>( hdr->msg_type ) << std::endl;
         }
