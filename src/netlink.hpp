@@ -14,7 +14,7 @@ struct RouteMsg {
     int af;
     std::vector<uint8_t> destination;
     std::vector<RouteNhop> nhops;
-    uint8_t dest_len;
+    uint8_t dest_len{ 0U };
     uint8_t vrf_id{ 0U };
 };
 

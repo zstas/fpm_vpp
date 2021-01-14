@@ -16,6 +16,7 @@ public:
     bool add_route( const RouteMsg &msg, bool add );
     bool create_tap( uint8_t id, const std::string &netns );
     bool set_vrf( const std::string &name, uint32_t id, bool is_add, bool is_v6 );
+    bool set_ip_punt_redirect( uint32_t from, uint32_t to, bool add );
 private:
     vapi::Connection con;
     std::map<std::string,uint32_t> vrfs;

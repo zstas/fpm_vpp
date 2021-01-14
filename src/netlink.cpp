@@ -28,11 +28,11 @@ static std::string printIp( int af, const std::vector<uint8_t> &vec ) {
 }
 
 std::ostream& operator<<( std::ostream &os, const RouteMsg &m ) {
-    os << "Destination: " << printIp( m.af, m.destination) << "/" << (int)m.dest_len;
+    os << "Destination: " << printIp( m.af, m.destination) << "/" << (int)m.dest_len << "(vec len: " << m.destination.size() << ")";
     os << " VRF ID: " << (int)m.vrf_id;
     for( auto const &nh: m.nhops ) {
         if( !nh.nexthop.empty() )
-            os << " Nexthop: " << printIp( m.af, nh.nexthop );
+            os << " Nexthop: " << printIp( m.af, nh.nexthop ) << "(vec len: " << nh.nexthop.size() << ")";
         os << " Priority: " << nh.priority;
         if( nh.oif ) 
             os << " OIF: " << *nh.oif;
@@ -53,11 +53,11 @@ RouteMsg Netlink::process_route_msg( const struct nlmsghdr *nlh ) {
     while( RTA_OK( attr, len ) ) {
         switch( attr->rta_type ) {
         case RTA_DST:
-            msg.destination = std::vector<uint8_t>( (uint8_t*)RTA_DATA( attr ),  (uint8_t*)RTA_DATA( attr ) + attr->rta_len );
+            msg.destination = std::vector<uint8_t>( (uint8_t*)RTA_DATA( attr ),  (uint8_t*)RTA_DATA( attr ) + RTA_PAYLOAD( attr ) );
             msg.dest_len = rm->rtm_dst_len;
             break;
         case RTA_GATEWAY:
-            nhop.nexthop = std::vector<uint8_t>( (uint8_t*)RTA_DATA( attr ),  (uint8_t*)RTA_DATA( attr ) + attr->rta_len );
+            nhop.nexthop = std::vector<uint8_t>( (uint8_t*)RTA_DATA( attr ),  (uint8_t*)RTA_DATA( attr ) + RTA_PAYLOAD( attr ) );
             break;
         case RTA_PRIORITY:
             nhop.priority = *(uint32_t*)RTA_DATA( attr );
@@ -76,7 +76,7 @@ RouteMsg Netlink::process_route_msg( const struct nlmsghdr *nlh ) {
                 while( RTA_OK( nhattr, attrlen ) ) {
                     switch( nhattr->rta_type ) {
                     case RTA_GATEWAY:
-                        nhop.nexthop = std::vector<uint8_t>( (uint8_t*)RTA_DATA( attr ),  (uint8_t*)RTA_DATA( attr ) + attr->rta_len );
+                        nhop.nexthop = std::vector<uint8_t>( (uint8_t*)RTA_DATA( attr ),  (uint8_t*)RTA_DATA( attr ) + RTA_PAYLOAD( attr ) );
                         break;
                     case RTA_PRIORITY:
                         nhop.priority = *(uint32_t*)RTA_DATA( nhattr );

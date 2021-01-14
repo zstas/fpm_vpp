@@ -29,12 +29,12 @@ bool VPPAPI::add_route( const RouteMsg &msg, bool add ) {
     req.is_add = add ? 1 : 0;
     req.route.table_id = msg.vrf_id;
     req.is_multipath = 0;
+    req.route.prefix.len = msg.dest_len;
 
     if( msg.af == AF_INET ) {
         req.route.prefix.address.af = vapi_enum_address_family::ADDRESS_IP4;
         req.route.paths->proto = vapi_enum_fib_path_nh_proto::FIB_API_PATH_NH_PROTO_IP4;
         std::copy( msg.destination.begin(), msg.destination.end(), req.route.prefix.address.un.ip4 );
-        req.route.prefix.len = msg.dest_len;
 
         // Filling up the nexthop info
         req.route.n_paths = msg.nhops.size();
@@ -50,7 +50,6 @@ bool VPPAPI::add_route( const RouteMsg &msg, bool add ) {
         req.route.prefix.address.af = vapi_enum_address_family::ADDRESS_IP6;
         req.route.paths->proto = vapi_enum_fib_path_nh_proto::FIB_API_PATH_NH_PROTO_IP6;
         std::copy( msg.destination.begin(), msg.destination.end(), req.route.prefix.address.un.ip6 );
-        req.route.prefix.len = msg.dest_len;
 
         // Filling up the nexthop info
         req.route.n_paths = msg.nhops.size();
@@ -141,3 +140,27 @@ bool VPPAPI::set_vrf( const std::string &name, uint32_t id, bool is_add, bool is
     return true;
 }
 
+bool VPPAPI::set_ip_punt_redirect( uint32_t from, uint32_t to, bool add ) {
+    vapi::Ip_punt_redirect redirect { con };
+
+    auto &req = redirect.get_request().get_payload();
+    req.is_add = add ? 1 : 0;
+    req.punt.rx_sw_if_index = from;
+    req.punt.tx_sw_if_index = to;
+
+    auto ret = redirect.execute();
+    if( ret != VAPI_OK ) {
+        return false;
+    }
+
+    do {
+        ret = con.wait_for_response( redirect );
+    } while( ret == VAPI_EAGAIN );
+
+    auto &repl = redirect.get_response().get_payload();
+    if( repl.retval < 0 ) {
+        return false;
+    }
+
+    return true;
+}
