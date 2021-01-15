@@ -8,6 +8,8 @@ struct RouteNhop {
     std::vector<uint8_t> nexthop;
     std::optional<uint32_t> oif;
     uint32_t priority{ 0U };
+    uint32_t vrf_id{ 0U };
+    std::optional<uint32_t> label;
 };
 
 struct RouteMsg {
@@ -26,6 +28,7 @@ private:
 public:
     Netlink() {
         // vpp.create_tap( 1, "bgp" );
+        vpp.set_vrf( "zet", 2, true, false );
     }
     RouteMsg process_route_msg( const struct nlmsghdr *nlh );
     bool process_one_msg( const struct nlmsghdr *nlh );

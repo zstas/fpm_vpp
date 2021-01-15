@@ -34,8 +34,12 @@ std::ostream& operator<<( std::ostream &os, const RouteMsg &m ) {
         if( !nh.nexthop.empty() )
             os << " Nexthop: " << printIp( m.af, nh.nexthop ) << "(vec len: " << nh.nexthop.size() << ")";
         os << " Priority: " << nh.priority;
+        os << " NHVrf: " << nh.vrf_id;
         if( nh.oif ) 
             os << " OIF: " << *nh.oif;
+
+        if( nh.label ) 
+            os << " MPLS Label: " << *nh.label;
     }
     return os;
 }
@@ -65,6 +69,10 @@ RouteMsg Netlink::process_route_msg( const struct nlmsghdr *nlh ) {
         case RTA_OIF:
             nhop.oif = *(uint32_t*)RTA_DATA( attr );
             break;
+        case RTA_TABLE:
+            nhop.vrf_id = *(uint32_t*)RTA_DATA( attr );
+        case RTA_FLOW:
+            nhop.label = *(uint32_t*)RTA_DATA( attr );
         case RTA_MULTIPATH: {
             struct rtnexthop *nhptr = (struct rtnexthop*)RTA_DATA( attr );
             int rtnhp_len = RTNH_ALIGN( attr->rta_len );
@@ -84,6 +92,10 @@ RouteMsg Netlink::process_route_msg( const struct nlmsghdr *nlh ) {
                     case RTA_OIF:
                         nhop.oif = *(uint32_t*)RTA_DATA( nhattr );
                         break;
+                    case RTA_TABLE:
+                        nhop.vrf_id = *(uint32_t*)RTA_DATA( nhattr );
+                    case RTA_FLOW:
+                        nhop.label = *(uint32_t*)RTA_DATA( nhattr );
                     }
                     nhattr = RTA_NEXT( nhattr, attrlen );
                 }
